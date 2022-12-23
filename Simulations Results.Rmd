@@ -1,0 +1,406 @@
+---
+title: "Simulations Results"
+author: "Maria Godinez"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r}
+my_packages<-c("haven","readr","purrr","mice","dplyr","plyr","tableone","naniar","UpSetR","readxl")
+lapply(my_packages, library, character.only = TRUE)
+```
+
+```{r include=FALSE}
+one_interation<-function(n,M1,X1,X2,X3,X4,Y){
+  #Create dataframe
+  df_complete<- data.frame(X1,X2,X3,X4,Y)
+  # Step 2: Generate missingness:
+#########################################################################
+  #Scenario 1: missing complete at random
+  Y_missing_M1<-replace(Y,which(M1==1),NA)
+  df_missing<-data.frame(X1,X2,X3,X4,Y_missing_M1)
+#########################################################################
+  # Step 3: Evaluate Missing Data Imputation Approaches (impact on dichotomized outcome):
+  #Method 1: impute with mean(Y) – 2*sd(Y), Y: is after missingness is created
+  
+  df_missing$Y_imputed_M1<-replace(df_missing$Y_missing_M1,is.na(df_missing$Y_missing_M1),(mean(df_missing$Y_missing_M1,na.rm=TRUE)-(2*sd(df_missing$Y_missing_M1,na.rm=TRUE))))
+  
+#########################################################################
+  #Method 1b: impute with mean(Y_ill) – 2*sd(Y_ill) and mean(Y_not_ill) – 2*sd(Y_not_ill)
+  Y_ill<-Y[which(X4==1)]
+  #key_ill<-key[which(X4==1)]
+  #extracted the values of ill patients from the missing data in scenario 1
+  Y_missing_ill<-Y_missing_M1[which(X4==1)]
+  Y_ill_imputed_M1<-replace(Y_missing_ill,is.na(Y_missing_ill),(mean(Y_missing_ill,na.rm=TRUE)-(2*sd(Y_missing_ill,na.rm=TRUE))))
+
+  Y_not_ill<-Y[which(X4==0)]
+  Y_missing_not_ill<-Y_missing_M1[which(X4==0)]
+  Y_not_ill_imputed_M1<-replace(Y_missing_not_ill,is.na(Y_missing_not_ill),(mean(Y_missing_not_ill,na.rm=TRUE)-(2*sd(Y_missing_not_ill,na.rm=TRUE))))
+  
+  Y_imputed_split<-c(Y_ill_imputed_M1,Y_not_ill_imputed_M1)
+  
+#########################################################################
+  # Method 1b: impute with (randomly generated number) rnorm(mean(Y_ill), sd(Y_ill) for too ill group; 
+  #rnorm(mean(Y_not_ill),sd(Y_not_ill)) for not too ill group; Y_ill and 
+  M1_ill<-M1[which(M1==1&X4==1)]
+  #rnorm(sum(M1_ill),mean(Y_missing_ill,na.rm=TRUE),sd(Y_missing_ill,na.rm=TRUE)) #- draw one value per missing value
+  Y_missing_ill_int<-Y_missing_ill
+  Y_missing_ill_int[is.na(Y_missing_ill_int)]<-rnorm(sum(M1_ill),mean(Y_missing_ill_int,na.rm=TRUE),sd(Y_missing_ill_int,na.rm=TRUE)) #- draw one value per missing value
+  Y_imputed_ill<-Y_missing_ill_int
+  
+  
+  #NOT ILL
+  M1_not_ill<-M1[which(M1==1&X4==0)]
+  #key_not_ill<-key[which(M1==1&X4==0)]
+  #rnorm(sum(M1_ill),mean(Y_missing_ill,na.rm=TRUE),sd(Y_missing_ill,na.rm=TRUE)) #- draw one value per missing value
+  Y_missing_not_ill_int<-Y_missing_not_ill
+  Y_missing_not_ill_int[is.na(Y_missing_not_ill_int)]<-rnorm(sum(M1_not_ill),mean(Y_missing_not_ill_int,na.rm=TRUE),sd(Y_missing_not_ill_int,na.rm=TRUE)) #- draw one value per missing value
+  Y_imputed_not_ill<-Y_missing_not_ill_int
+  #hist(Y_not_ill,breaks=20)
+  
+  Y_imputed_combine<-c(Y_imputed_not_ill,Y_imputed_ill)
+  #data_2a<-data.frame(Y_imputed_combine,data_1b$key_ill)
+#########################################################################
+  # #combine them and evaluate
+  # #Method 3: impute with multiple imputation using mice package, utilizing variables Y x1,x2,x3,x4
+  # df<- data.frame(X1,X2,X3,X4,Y_missing_M1)
+  df_imputed <- mice(df_missing,m=10,maxit=50,meth='pmm',print=F)
+  # #use the pool function
+  mice_imputed = complete(df_imputed, 'long')
+  # #mice_key=rep(key,5)
+  # #data_3<-data.frame(mice_imputed,mice_key)
+  summ_prop<-NULL
+  # #mice::complete(df_imputed)
+  for(i in 1:10){
+     mice_imputed.i<-mice_imputed[mice_imputed$.imp==i,]
+     prop<-length(which(mice_imputed.i$Y_missing_M1>0))/length(which(mice_imputed.i$Y_missing_M1<=0))
+     summ_prop<-c(summ_prop,prop)
+   }
+#########################################################################
+  mean_orginal<-length(which(Y>0))/length(which(Y<=0))
+  #method 1a:
+  
+  mean_1a<-length(which(df_missing$Y_imputed_M1>0))/length(which(df_missing$Y_imputed_M1<=0))
+  #method 1b:
+  #hist(Y_imputed_split,breaks=20,main="Imputation by Ill and Not Ill mean(Y) – 2*sd(Y)")
+  mean_1b<-length(which(as.numeric(Y_imputed_split)>0))/length(which(as.numeric(Y_imputed_split)<=0))
+  #method 2:
+  mean_2<-length(which(Y_imputed_combine>0))/length(which(Y_imputed_combine<=0))
+  
+  #method 3:
+  #dataframe with results
+  Means=c(mean_orginal,mean_1a,mean_1b,mean_2,mean(summ_prop))
+
+  return(Means)
+}
+```
+
+## Simulations 1
+### Probablility of Missingness = 0.1
+```{r}
+#Run simulations multiple times
+n_simulations=10 #samples of n
+n=1000 #people
+mu_X1=0;sd_X1=1#model after avlt_total sd=1.05085,-1.377923 mean
+mu_X2=0;sd_X2=1
+p_X3=0.5
+p_X4=0.5
+p_missing=0.1#proportion of missing 0.3573944
+#0.09 * X4 + 0.01*(1-X4)
+
+beta1=0
+beta2=1
+beta3=0
+beta4=-1
+
+sims_results<-data.frame()
+  
+
+for(i in 1:n_simulations){
+
+#suggestion:replace specifications with a parameter to change outside
+X1.t<-rnorm(n,mean=mu_X1,sd=sd_X1)
+# X2 ~ rnorm (N, mean = 0, sd = 1), beta2 = 1
+X2.t<-rnorm(n,mean=mu_X2,sd=sd_X2)
+# X3 ~ rbinom(N, n = 1, p = 0.5), beta3 = 0
+X3.t<-rbinom(n,1,p_X3)
+# X4 ~ rbinom(N, n = 1, p = 0.5), beta4 = -1 (1: too ill; 0: not too ill)
+X4.t<-rbinom(n,1,p_X4)
+# Y ~ beta*X (Y: true QNPZ score)
+Y.t<-X1.t*beta1+X2.t*beta2+X3.t*beta3+X4.t*beta4
+M1.t<-rbinom(n, 1, p_missing)
+
+data1<-data.frame(X1.t,X2.t,X3.t,X4.t,Y.t,M1.t)
+
+
+results_one<-one_interation(n,data1$M1.t,data1$X1.t,data1$X2.t,data1$X3.t,data1$X4.t,data1$Y.t)
+
+sims_results<-rbind(sims_results,results_one)
+data1<-data.frame()
+results_one<-NULL
+
+}
+
+#all the values to numeric
+colnames(sims_results)<-c("original","method 1a","method 1b","method2","method3")
+sims_results$original<-as.numeric(sims_results$original)
+sims_results$`method 1a`<-as.numeric(sims_results$`method 1a`)
+sims_results$`method 1b`<-as.numeric(sims_results$`method 1b`)
+sims_results$`method2`<-as.numeric(sims_results$`method2`)
+sims_results$`method3`<-as.numeric(sims_results$`method3`)
+```
+
+```{r echo=FALSE}
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+sims_results
+estimates_simulation
+```
+
+## Simulations 2
+### Probablility of Missingness = 0.08
+```{r include=FALSE}
+#Run simulations multiple times
+n_simulations=10 #samples of n
+n=1000 #people
+mu_X1=0;sd_X1=1#model after avlt_total sd=1.05085,-1.377923 mean
+mu_X2=0;sd_X2=1
+p_X3=0.5
+p_X4=0.5
+p_missing=0.08
+
+beta1=0
+beta2=1
+beta3=0
+beta4=-1
+
+sims_results<-data.frame()
+  
+
+for(i in 1:n_simulations){
+
+#suggestion:replace specifications with a parameter to change outside
+X1.t<-rnorm(n,mean=mu_X1,sd=sd_X1)
+# X2 ~ rnorm (N, mean = 0, sd = 1), beta2 = 1
+X2.t<-rnorm(n,mean=mu_X2,sd=sd_X2)
+# X3 ~ rbinom(N, n = 1, p = 0.5), beta3 = 0
+X3.t<-rbinom(n,1,p_X3)
+# X4 ~ rbinom(N, n = 1, p = 0.5), beta4 = -1 (1: too ill; 0: not too ill)
+X4.t<-rbinom(n,1,p_X4)
+# Y ~ beta*X (Y: true QNPZ score)
+Y.t<-X1.t*beta1+X2.t*beta2+X3.t*beta3+X4.t*beta4
+M1.t<-rbinom(n, 1, p_missing)
+
+data1<-data.frame(X1.t,X2.t,X3.t,X4.t,Y.t,M1.t)
+
+
+results_one<-one_interation(n,data1$M1.t,data1$X1.t,data1$X2.t,data1$X3.t,data1$X4.t,data1$Y.t)
+
+sims_results<-rbind(sims_results,results_one)
+data1<-data.frame()
+results_one<-NULL
+
+}
+
+#all the values to numeric
+colnames(sims_results)<-c("original","method 1a","method 1b","method2","method3")
+sims_results$original<-as.numeric(sims_results$original)
+sims_results$`method 1a`<-as.numeric(sims_results$`method 1a`)
+sims_results$`method 1b`<-as.numeric(sims_results$`method 1b`)
+sims_results$`method2`<-as.numeric(sims_results$`method2`)
+sims_results$`method3`<-as.numeric(sims_results$`method3`)
+```
+
+```{r echo=FALSE}
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+sims_results
+estimates_simulation
+```
+
+## Simulations 3
+### Probablility of Missingness = 0.08
+### Update mu_X2 and sd_X2
+```{r include=FALSE}
+#Run simulations multiple times
+n_simulations=10 #samples of n
+n=1000 #people
+mu_X1=0;sd_X1=1#model after avlt_total sd=1.05085,-1.377923 mean
+mu_X2=-1.38;sd_X2=1.05
+p_X3=0.5
+p_X4=0.5
+p_missing=0.08
+
+beta1=0
+beta2=1
+beta3=0
+beta4=-1
+
+sims_results<-data.frame()
+  
+
+for(i in 1:n_simulations){
+
+#suggestion:replace specifications with a parameter to change outside
+X1.t<-rnorm(n,mean=mu_X1,sd=sd_X1)
+# X2 ~ rnorm (N, mean = 0, sd = 1), beta2 = 1
+X2.t<-rnorm(n,mean=mu_X2,sd=sd_X2)
+# X3 ~ rbinom(N, n = 1, p = 0.5), beta3 = 0
+X3.t<-rbinom(n,1,p_X3)
+# X4 ~ rbinom(N, n = 1, p = 0.5), beta4 = -1 (1: too ill; 0: not too ill)
+X4.t<-rbinom(n,1,p_X4)
+# Y ~ beta*X (Y: true QNPZ score)
+Y.t<-X1.t*beta1+X2.t*beta2+X3.t*beta3+X4.t*beta4
+M1.t<-rbinom(n, 1, p_missing)
+
+data1<-data.frame(X1.t,X2.t,X3.t,X4.t,Y.t,M1.t)
+
+
+results_one<-one_interation(n,data1$M1.t,data1$X1.t,data1$X2.t,data1$X3.t,data1$X4.t,data1$Y.t)
+
+sims_results<-rbind(sims_results,results_one)
+data1<-data.frame()
+results_one<-NULL
+
+}
+
+#all the values to numeric
+colnames(sims_results)<-c("original","method 1a","method 1b","method2","method3")
+sims_results$original<-as.numeric(sims_results$original)
+sims_results$`method 1a`<-as.numeric(sims_results$`method 1a`)
+sims_results$`method 1b`<-as.numeric(sims_results$`method 1b`)
+sims_results$`method2`<-as.numeric(sims_results$`method2`)
+sims_results$`method3`<-as.numeric(sims_results$`method3`)
+```
+
+```{r echo=FALSE}
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+sims_results
+estimates_simulation
+```
+
+## Simulations 2
+### Probablility of Missingness = 0.09 * X4 + 0.01*(1-X4)
+```{r include=FALSE}
+#Run simulations multiple times
+n_simulations=10 #samples of n
+n=1000 #people
+mu_X1=0;sd_X1=1#model after avlt_total sd=1.05085,-1.377923 mean
+mu_X2=0;sd_X2=1
+p_X3=0.5
+p_X4=0.5
+#p_missing=0.09 * X4 + 0.01*(1-X4)
+
+beta1=0
+beta2=1
+beta3=0
+beta4=-1
+
+sims_results<-data.frame()
+  
+
+for(i in 1:n_simulations){
+
+#suggestion:replace specifications with a parameter to change outside
+X1.t<-rnorm(n,mean=mu_X1,sd=sd_X1)
+# X2 ~ rnorm (N, mean = 0, sd = 1), beta2 = 1
+X2.t<-rnorm(n,mean=mu_X2,sd=sd_X2)
+# X3 ~ rbinom(N, n = 1, p = 0.5), beta3 = 0
+X3.t<-rbinom(n,1,p_X3)
+# X4 ~ rbinom(N, n = 1, p = 0.5), beta4 = -1 (1: too ill; 0: not too ill)
+X4.t<-rbinom(n,1,p_X4)
+# Y ~ beta*X (Y: true QNPZ score)
+Y.t<-X1.t*beta1+X2.t*beta2+X3.t*beta3+X4.t*beta4
+M1.t<-rbinom(n, 1, 0.09 * X4.t + 0.01*(1-X4.t))
+
+data1<-data.frame(X1.t,X2.t,X3.t,X4.t,Y.t,M1.t)
+
+
+results_one<-one_interation(n,data1$M1.t,data1$X1.t,data1$X2.t,data1$X3.t,data1$X4.t,data1$Y.t)
+print(i)
+print(results_one)
+
+sims_results<-rbind(sims_results,results_one)
+data1<-data.frame()
+results_one<-NULL
+
+}
+
+#all the values to numeric
+colnames(sims_results)<-c("original","method 1a","method 1b","method2","method3")
+sims_results$original<-as.numeric(sims_results$original)
+sims_results$`method 1a`<-as.numeric(sims_results$`method 1a`)
+sims_results$`method 1b`<-as.numeric(sims_results$`method 1b`)
+sims_results$`method2`<-as.numeric(sims_results$`method2`)
+sims_results$`method3`<-as.numeric(sims_results$`method3`)
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+
+```
+
+```{r echo=FALSE}
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+sims_results
+estimates_simulation
+```
+
+## Simulations 4
+### Probablility of Missingness = 0.09 * X4 + 0.01*(1-X4)
+```{r include=FALSE}
+#Run simulations multiple times
+n_simulations=10 #samples of n
+n=1000 #people
+mu_X1=0;sd_X1=1#model after avlt_total sd=1.05085,-1.377923 mean
+mu_X2=0;sd_X2=1
+p_X3=0.5
+p_X4=0.38
+#p_missing=0.09 * X4 + 0.01*(1-X4)
+
+beta1=0
+beta2=1
+beta3=0
+beta4=-1
+
+sims_results<-data.frame()
+  
+
+for(i in 1:n_simulations){
+
+#suggestion:replace specifications with a parameter to change outside
+X1.t<-rnorm(n,mean=mu_X1,sd=sd_X1)
+# X2 ~ rnorm (N, mean = 0, sd = 1), beta2 = 1
+X2.t<-rnorm(n,mean=mu_X2,sd=sd_X2)
+# X3 ~ rbinom(N, n = 1, p = 0.5), beta3 = 0
+X3.t<-rbinom(n,1,p_X3)
+# X4 ~ rbinom(N, n = 1, p = 0.5), beta4 = -1 (1: too ill; 0: not too ill)
+X4.t<-rbinom(n,1,p_X4)
+# Y ~ beta*X (Y: true QNPZ score)
+Y.t<-X1.t*beta1+X2.t*beta2+X3.t*beta3+X4.t*beta4
+M1.t<-rbinom(n, 1, 0.09 * X4.t + 0.01*(1-X4.t))
+
+data1<-data.frame(X1.t,X2.t,X3.t,X4.t,Y.t,M1.t)
+
+
+results_one<-one_interation(n,data1$M1.t,data1$X1.t,data1$X2.t,data1$X3.t,data1$X4.t,data1$Y.t)
+print(i)
+print(results_one)
+
+sims_results<-rbind(sims_results,results_one)
+data1<-data.frame()
+results_one<-NULL
+
+}
+
+#all the values to numeric
+colnames(sims_results)<-c("original","method 1a","method 1b","method2","method3")
+sims_results$original<-as.numeric(sims_results$original)
+sims_results$`method 1a`<-as.numeric(sims_results$`method 1a`)
+sims_results$`method 1b`<-as.numeric(sims_results$`method 1b`)
+sims_results$`method2`<-as.numeric(sims_results$`method2`)
+sims_results$`method3`<-as.numeric(sims_results$`method3`)
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+
+```
+
+```{r echo=FALSE}
+estimates_simulation<-data.frame(method=colnames(sims_results),Mean=colMeans(sims_results),Sd=apply(sims_results,2,var))
+sims_results
+estimates_simulation
+```
